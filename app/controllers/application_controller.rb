@@ -121,6 +121,7 @@ class ApplicationController < ActionController::Base
     end
     @js_env[:IS_LARGE_ROSTER] = true if !@js_env[:IS_LARGE_ROSTER] && @context.respond_to?(:large_roster?) && @context.large_roster?
     @js_env[:context_asset_string] = @context.try(:asset_string) if !@js_env[:context_asset_string]
+    @js_env[:ping_url] = polymorphic_url([:api_v1, @context, :ping]) if @context.is_a?(Course)
     @js_env[:TIMEZONE] = Time.zone.tzinfo.identifier if !@js_env[:TIMEZONE]
     @js_env[:CONTEXT_TIMEZONE] = @context.time_zone.tzinfo.identifier if !@js_env[:CONTEXT_TIMEZONE] && @context.respond_to?(:time_zone) && @context.time_zone.present?
     @js_env[:LOCALE] = I18n.qualified_locale if !@js_env[:LOCALE]
@@ -316,24 +317,20 @@ class ApplicationController < ActionController::Base
   alias :authorized_action? :authorized_action
 
   def is_authorized_action?(object, *opts)
+    return false unless object
+
     user = opts.shift
-    action_session = nil
     action_session ||= session
     action_session = opts.shift if !opts[0].is_a?(Symbol) && !opts[0].is_a?(Array)
-    actions = Array(opts.shift)
-    can_do = false
+    actions = Array(opts.shift).flatten
 
     begin
-      if object == @context && user == @current_user
-        @context_all_permissions ||= @context.grants_rights?(user, session, nil)
-        can_do = actions.any?{|a| @context_all_permissions[a] }
-      else
-        can_do = object.grants_rights?(user, action_session, *actions).values.any?
-      end
+      return object.grants_any_right?(user, action_session, *actions)
     rescue => e
-      logger.warn "#{object.inspect} raised an error while granting rights.  #{e.inspect}"
+      logger.warn "#{object.inspect} raised an error while granting rights.  #{e.inspect}" if logger
     end
-    can_do
+
+    false
   end
 
   def render_unauthorized_action
@@ -510,7 +507,7 @@ class ApplicationController < ActionController::Base
         # don't load it again if we've already got it
         next if @contexts.any? { |c| c.asset_string == include_context }
         context = Context.find_by_asset_string(include_context)
-        @contexts << context if context && context.grants_right?(@current_user, nil, :read)
+        @contexts << context if context && context.grants_right?(@current_user, :read)
       end
     end
     @contexts = @contexts.uniq
@@ -746,7 +743,6 @@ class ApplicationController < ActionController::Base
   end
 
   def clear_cached_contexts
-    ActiveRecord::Base.clear_cached_contexts
     RoleOverride.clear_cached_contexts
   end
 
@@ -851,7 +847,7 @@ class ApplicationController < ActionController::Base
 
         @page_view_update = true
       end
-      if @page_view && !request.xhr? && request.get? && (response.content_type || "").match(/html/)
+      if @page_view && !request.xhr? && request.get? && (response.content_type || "").to_s.match(/html/)
         @page_view.render_time ||= (Time.now.utc - @page_before_render) rescue nil
         @page_view_update = true
       end
@@ -1386,9 +1382,14 @@ class ApplicationController < ActionController::Base
 
   def check_incomplete_registration
     if @current_user
-      js_env :INCOMPLETE_REGISTRATION => params[:registration_success] && @current_user.pre_registered?, :USER_EMAIL => @current_user.email
+      js_env :INCOMPLETE_REGISTRATION => incomplete_registration?, :USER_EMAIL => @current_user.email
     end
   end
+
+  def incomplete_registration?
+    @current_user && params[:registration_success] && @current_user.pre_registered?
+  end
+  helper_method :incomplete_registration?
 
   def page_views_enabled?
     PageView.page_views_enabled?
@@ -1516,6 +1517,7 @@ class ApplicationController < ActionController::Base
       # file upload forms and s3 upload success redirects -- we'll respond with text instead.
       if options[:as_text] || json_as_text?
         options[:text] = json
+        options[:content_type] = "text/html"
       else
         options[:json] = json
       end

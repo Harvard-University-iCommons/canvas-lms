@@ -20,15 +20,18 @@
 if RUBY_VERSION == "2.0.0"
   warn "Ruby 2.0 support is untested"
   ruby '2.0.0', :engine => 'ruby', :engine_version => '2.0.0'
-elsif RUBY_VERSION == "2.1.0"
+elsif RUBY_VERSION >= "2.1" && RUBY_VERSION < "2.2"
   warn "Ruby 2.1 support is untested"
-  ruby '2.1.0', :engine => 'ruby', :engine_version => '2.1.0'
+  ruby RUBY_VERSION, :engine => 'ruby', :engine_version => RUBY_VERSION
+elsif RUBY_VERSION >= "2.2"
+  warn "Ruby newer than 2.1 is very UNSUPPORTED"
+  ruby RUBY_VERSION, :engine => 'ruby', :engine_version => RUBY_VERSION
 else
   ruby '1.9.3', :engine => 'ruby', :engine_version => '1.9.3'
 end
 
 # # enforce the version of bundler itself, to avoid any surprises
-required_bundler_version = '1.5.1'..'1.6.2'
+required_bundler_version = '1.5.1'..'1.6.3'
 gem 'bundler', [">=#{required_bundler_version.first}", "<=#{required_bundler_version.last}"]
 
 unless required_bundler_version.include?(Bundler::VERSION)
@@ -80,7 +83,12 @@ else
   end
 end
 
-platforms :ruby_20, :ruby_21 do
-  gem 'syck', '1.0.1'
-  gem 'iconv', '1.0.3'
+if RUBY_VERSION >= '2.2'
+  gem 'syck', github: 'tenderlove/syck'
+  gem 'iconv', '1.0.4'
+else
+  platforms :ruby_20, :ruby_21 do
+    gem 'syck', '1.0.3'
+    gem 'iconv', '1.0.4'
+  end
 end

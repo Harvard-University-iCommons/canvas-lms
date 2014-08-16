@@ -13,6 +13,8 @@ else
   routes = CanvasRails::Application.routes
 end
 
+full_path_glob = CANVAS_RAILS2 ? '/*full_path' : '(/*full_path)'
+
 routes.draw do
   resources :submission_comments, :only => :destroy
 
@@ -77,11 +79,12 @@ routes.draw do
       match 'inline_view' => 'files#show', :as => :inline_view, :inline => '1'
       match 'scribd_render' => 'files#scribd_render', :as => :scribd_render
       match 'contents' => 'files#attachment_content', :as => :attachment_content
-      match ':file_path' => 'files#show_relative', :as => :relative_path, :file_path => /.+/
       collection do
+        get "folder#{full_path_glob}", :controller => :files, :action => :ember_app, :format => false
         get :quota
         post :reorder
       end
+      match ':file_path' => 'files#show_relative', :as => :relative_path, :file_path => /.+/ #needs to stay below ember_app route
     end
   end
 
@@ -386,7 +389,6 @@ routes.draw do
     match 'copy' => 'courses#copy_course', :as => :copy_course, :via => :post
     concerns :media
     match 'user_notes' => 'user_notes#user_notes', :as => :user_notes
-    match 'switch_role/:role' => 'courses#switch_role', :as => :switch_role
     match 'details/sis_publish' => 'courses#sis_publish_status', :as => :sis_publish_status, :via => :get
     match 'details/sis_publish' => 'courses#publish_to_sis', :as => :publish_to_sis, :via => :post
     resources :user_lists, :only => :create
@@ -400,8 +402,7 @@ routes.draw do
 
   match 'quiz_statistics/:quiz_statistics_id/files/:file_id/download' => 'files#show', :as => :quiz_statistics_download, :download => '1'
 
-  match '/submissions/:submission_id/attachments/:attachment_id/crocodoc_sessions' => 'crocodoc_sessions#create', :via => :post
-  match '/attachments/:attachment_id/crocodoc_sessions' => 'crocodoc_sessions#create', :via => :post
+  match '/crocodoc_session' => 'crocodoc_sessions#show', :via => :get, :as => :crocodoc_session
   match '/canvadoc_session' => 'canvadoc_sessions#show', :via => :get, :as => :canvadoc_session
 
   resources :page_views, :only => [:update]
@@ -606,7 +607,7 @@ routes.draw do
   match 'grades' => 'users#grades', :as => :grades
   match 'login' => 'pseudonym_sessions#new', :as => :login, :via => :get
   match 'login' => 'pseudonym_sessions#create', :via => :post
-  match 'logout' => 'pseudonym_sessions#destroy', :as => :logout
+  match 'logout' => 'pseudonym_sessions#destroy', :as => :logout, :via => :delete
   match 'login/cas' => 'pseudonym_sessions#new', :as => :cas_login, :via => :get
   match 'login/cas' => 'pseudonym_sessions#cas_logout', :as => :cas_logout, :via => :post
   match 'login/otp' => 'pseudonym_sessions#otp_login', :as => :otp_login, :via => [:get, :post]
@@ -667,6 +668,7 @@ routes.draw do
       get :communication
       put :communication_update
       get :settings
+      get :observees
     end
   end
 
@@ -725,7 +727,8 @@ routes.draw do
   match 'calendar2' => 'calendars#show2', :as => :calendar2, :via => :get
   match 'course_sections/:course_section_id/calendar_events/:id' => 'calendar_events#show', :as => :course_section_calendar_event, :via => :get
   match 'switch_calendar/:preferred_calendar' => 'calendars#switch_calendar', :as => :switch_calendar, :via => :post
-  match 'files' => 'files#full_index', :as => :files, :via => :get
+  match 'files' => 'files#index', :as => :files, :via => :get
+  get "files/folder#{full_path_glob}", :controller => :files, :action => :ember_app, :format => false
   match 'files/s3_success/:id' => 'files#s3_success', :as => :s3_success
   match 'files/:id/public_url' => 'files#public_url', :as => :public_url
   match 'files/preflight' => 'files#preflight', :as => :file_preflight
@@ -837,8 +840,16 @@ routes.draw do
       post 'courses/:course_id/files', :action => :create_file, :path_name => 'course_create_file'
       post 'courses/:course_id/folders', :controller => :folders, :action => :create
       get 'courses/:course_id/folders/by_path/*full_path', :controller => :folders, :action => :resolve_path
+      get 'courses/:course_id/folders/by_path', :controller => :folders, :action => :resolve_path
       get  'courses/:course_id/folders/:id', :controller => :folders, :action => :show, :path_name => 'course_folder'
       put  'accounts/:account_id/courses', :action => :batch_update
+      post 'courses/:course_id/ping', :action => :ping, :path_name => 'course_ping'
+
+      get "courses/:course_id/content_list", :controller => :content_exports_api, :action => :content_list, :path_name => "course_content_list"
+    end
+
+    scope(:controller => :account_notifications) do
+      post 'accounts/:account_id/account_notifications', :action => :create, :path_name => 'account_notification'
     end
 
     scope(:controller => :tabs) do
@@ -862,6 +873,7 @@ routes.draw do
       get  'courses/:course_id/enrollments', :action => :index, :path_name => 'course_enrollments'
       get  'sections/:section_id/enrollments', :action => :index, :path_name => 'section_enrollments'
       get  'users/:user_id/enrollments', :action => :index, :path_name => 'user_enrollments'
+      get  'accounts/:account_id/enrollments/:id', :action => :show, :path_name => 'enrollment'
 
       post 'courses/:course_id/enrollments', :action => :create
       post 'sections/:section_id/enrollments', :action => :create
@@ -1047,8 +1059,10 @@ routes.draw do
       put 'users/:id', :action => :update
       post 'users/:user_id/files', :action => :create_file
 
+      get  'users/:user_id/files', :controller => :files, :action => :api_index, :path_name => 'user_files'
       post 'users/:user_id/folders', :controller => :folders, :action => :create
       get 'users/:user_id/folders/by_path/*full_path', :controller => :folders, :action => :resolve_path
+      get 'users/:user_id/folders/by_path', :controller => :folders, :action => :resolve_path
       get 'users/:user_id/folders/:id', :controller => :folders, :action => :show, :path_name => 'user_folder'
 
       get 'users/:id/settings', controller: 'users', action: 'settings'
@@ -1056,6 +1070,14 @@ routes.draw do
 
       put 'users/:id/merge_into/:destination_user_id', controller: 'users', action: 'merge_into'
       put 'users/:id/merge_into/accounts/:destination_account_id/users/:destination_user_id', controller: 'users', action: 'merge_into'
+
+      scope(:controller => :user_observees) do
+        get    'users/:user_id/observees', action: :index, path_name: 'user_observees'
+        post   'users/:user_id/observees', action: :create
+        get    'users/:user_id/observees/:observee_id', action: :show, path_name: 'user_observee'
+        put    'users/:user_id/observees/:observee_id', action: :update
+        delete 'users/:user_id/observees/:observee_id', action: :destroy
+      end
     end
 
     scope(:controller => :custom_data) do
@@ -1212,8 +1234,10 @@ routes.draw do
         resources :users, :path_prefix => "groups/:group_id", :name_prefix => "group_", :controller => :group_memberships, :except => [:show, :create]
       end
 
+      get  'groups/:group_id/files', :controller => :files, :action => :api_index, :path_name => 'group_files'
       post 'groups/:group_id/folders', :controller => :folders, :action => :create
       get 'groups/:group_id/folders/by_path/*full_path', :controller => :folders, :action => :resolve_path
+      get 'groups/:group_id/folders/by_path', :controller => :folders, :action => :resolve_path
       get 'groups/:group_id/folders/:id', :controller => :folders, :action => :show, :path_name => 'group_folder'
     end
 
@@ -1258,6 +1282,7 @@ routes.draw do
       delete 'files/:id', :action => :destroy
       put 'files/:id', :action => :api_update
       get 'files/:id/:uuid/status', :action => :api_file_status, :path_name => 'file_status'
+      get 'files/:id/public_url', :action => :public_url
       %w(course group user).each do |context|
         get "#{context}s/:#{context}_id/files/quota", :action => :api_quota
       end
@@ -1378,8 +1403,8 @@ routes.draw do
 
     scope(:controller => 'quizzes/quiz_submission_questions') do
       get '/quiz_submissions/:quiz_submission_id/questions', :action => :index, :path_name => 'quiz_submission_questions'
+      post '/quiz_submissions/:quiz_submission_id/questions', :action => :answer, :path_name => 'quiz_submission_question_answer'
       get '/quiz_submissions/:quiz_submission_id/questions/:id', :action => :show, :path_name => 'quiz_submission_question'
-      put '/quiz_submissions/:quiz_submission_id/questions/:id', :action => :answer, :path_name => 'quiz_submission_question_answer'
       put '/quiz_submissions/:quiz_submission_id/questions/:id/flag', :action => :flag, :path_name => 'quiz_submission_question_flag'
       put '/quiz_submissions/:quiz_submission_id/questions/:id/unflag', :action => :unflag, :path_name => 'quiz_submission_question_unflag'
     end

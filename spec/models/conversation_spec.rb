@@ -283,6 +283,20 @@ describe Conversation do
         @unsubscribed_guy.conversations.unread.size.should eql 0
       end
 
+      it "should increment only for message participants" do
+        root_convo = Conversation.initiate([@sender, @recipient, @subscribed_guy], false)
+        root_convo.add_message(@sender, 'test')
+
+        @subscribed_guy.conversations.first.update_attribute(:workflow_state, "read")
+        @subscribed_guy.reload.unread_conversations_count.should eql 0
+        @subscribed_guy.conversations.unread.size.should eql 0
+
+        root_convo.add_message(@sender, 'test2', :only_users => [@recipient])
+
+        @subscribed_guy.reload.unread_conversations_count.should eql 0
+        @subscribed_guy.conversations.unread.size.should eql 0
+      end
+
       it "should decrement when deleting an unread conversation" do
         root_convo = Conversation.initiate([@sender, @unread_guy], false)
         root_convo.add_message(@sender, 'test')
@@ -810,7 +824,7 @@ describe Conversation do
     end
 
     context "migration" do
-      before do
+      before :once do
         @u1 = student_in_course(:active_all => true).user
         @u2 = student_in_course(:active_all => true, :course => @course).user
         @course1 = @course
@@ -853,7 +867,7 @@ describe Conversation do
     end
 
     context 'tag updates' do
-      before(:each) do
+      before :once do
         @teacher    = teacher_in_course(:active_all => true).user
         @student    = student_in_course(:active_all => true, :course => @course).user
         @old_course = @course

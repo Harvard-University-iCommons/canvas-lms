@@ -59,7 +59,8 @@
 #         "sis_import_id": {
 #           "description": "The id of the SIS import.  This field is only included if the user came from a SIS import and has permissions to manage SIS information.",
 #           "example": "18",
-#           "type": "int64"
+#           "type": "integer",
+#           "format": "int64"
 #         },
 #         "sis_login_id": {
 #           "description": "DEPRECATED: The SIS login ID associated with the user. Please use the sis_user_id or login_id. This field will be removed in a future version of the API.",
@@ -147,7 +148,7 @@ class UsersController < ApplicationController
         :service => 'google_docs',
         :token => request_token.token,
         :secret => request_token.secret,
-        :user_secret => CanvasUuid::Uuid.generate(nil, 16),
+        :user_secret => CanvasSlug.generate(nil, 16),
         :return_url => return_to_url,
         :user => @real_current_user || @current_user,
         :original_host_with_port => request.host_with_port
@@ -185,7 +186,7 @@ class UsersController < ApplicationController
     elsif params[:service] == "facebook"
       oauth_request = OauthRequest.create(
         :service => 'facebook',
-        :secret => CanvasUuid::Uuid.generate("fb", 10),
+        :secret => CanvasSlug.generate("fb", 10),
         :return_url => return_to_url,
         :user => @current_user,
         :original_host_with_port => request.host_with_port
@@ -1225,13 +1226,13 @@ class UsersController < ApplicationController
     end
 
     managed_attributes = []
-    managed_attributes.concat [:name, :short_name, :sortable_name, :birthdate] if @user.grants_right?(@current_user, nil, :rename)
+    managed_attributes.concat [:name, :short_name, :sortable_name, :birthdate] if @user.grants_right?(@current_user, :rename)
     managed_attributes << :terms_of_use if @user == (@real_current_user || @current_user)
-    if @user.grants_right?(@current_user, nil, :manage_user_details)
+    if @user.grants_right?(@current_user, :manage_user_details)
       managed_attributes.concat([:time_zone, :locale])
     end
 
-    if @user.grants_right?(@current_user, nil, :update_avatar)
+    if @user.grants_right?(@current_user, :update_avatar)
       avatar = params[:user].delete(:avatar)
 
       # delete any avatar_image passed, because we only allow updating avatars
@@ -1254,8 +1255,8 @@ class UsersController < ApplicationController
     if user_params == params[:user]
       # admins can update avatar images even if they are locked
       admin_avatar_update = user_params[:avatar_image] &&
-        @user.grants_right?(@current_user, nil, :update_avatar) &&
-        @user.grants_right?(@current_user, nil, :manage_user_details)
+        @user.grants_right?(@current_user, :update_avatar) &&
+        @user.grants_right?(@current_user, :manage_user_details)
 
       if admin_avatar_update
         old_avatar_state = @user.avatar_state

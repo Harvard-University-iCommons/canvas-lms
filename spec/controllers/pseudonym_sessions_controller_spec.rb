@@ -286,7 +286,7 @@ describe PseudonymSessionsController do
         controller.request.env['canvas.domain_root_account'] = @account
         get 'saml_logout', :SAMLResponse => "foo", :RelayState => "/courses"
 
-        response.should redirect_to(:action => :destroy)
+        response.should redirect_to(login_url)
       end
     end
 
@@ -411,7 +411,7 @@ describe PseudonymSessionsController do
 
         context '/destroy' do
           it "should forward to correct IdP" do
-            get 'destroy'
+            delete 'destroy'
 
             response.headers['Location'].starts_with?(@aac2.log_out_url + "?SAMLRequest=").should be_true
           end
@@ -419,7 +419,7 @@ describe PseudonymSessionsController do
           it "should fail gracefully if AAC id gone" do
             session[:saml_aac_id] = 0
 
-            get 'destroy'
+            delete 'destroy'
             flash[:message].should == "Canvas was unable to log you out at your identity provider"
             response.should redirect_to(login_url(:no_auto=>'true'))
           end
@@ -437,21 +437,19 @@ describe PseudonymSessionsController do
 
           it "should find the correct AAC" do
             @aac1.any_instantiation.expects(:saml_settings).never
-            @aac2.any_instantiation.expects(:saml_settings)
+            @aac2.any_instantiation.expects(:saml_settings).at_least_once
+            controller.expects(:logout_user_action)
 
             get_saml_consume
-
-            response.should redirect_to(:action => :destroy)
           end
 
           it "should still logout if AAC config not found" do
             @aac1.any_instantiation.expects(:saml_settings).never
             @aac2.any_instantiation.expects(:saml_settings).never
+            controller.expects(:logout_user_action)
 
             @stub_hash[:issuer] = "nobody eh"
             get_saml_consume
-
-            response.should redirect_to(:action => :destroy)
           end
         end
       end
@@ -779,10 +777,12 @@ describe PseudonymSessionsController do
       user_with_pseudonym(:active_all => 1, :password => 'qwerty')
       @user.otp_secret_key = ROTP::Base32.random_base32
       @user.save!
+
+      ActionController::TestRequest.any_instance.stubs(:remote_ip).returns('myip')
     end
 
     it "should skip otp verification for a valid cookie" do
-      cookies['canvas_otp_remember_me'] = @user.otp_secret_key_remember_me_cookie(Time.now.utc)
+      cookies['canvas_otp_remember_me'] = @user.otp_secret_key_remember_me_cookie(Time.now.utc, nil, 'myip')
       post 'create', :pseudonym_session => { :unique_id => @pseudonym.unique_id, :password => 'qwerty' }
       response.should redirect_to dashboard_url(:login_success => 1)
     end
@@ -794,17 +794,23 @@ describe PseudonymSessionsController do
     end
 
     it "should ignore an expired cookie" do
-      cookies['canvas_otp_remember_me'] = @user.otp_secret_key_remember_me_cookie(6.months.ago)
+      cookies['canvas_otp_remember_me'] = @user.otp_secret_key_remember_me_cookie(6.months.ago, nil, 'myip')
       post 'create', :pseudonym_session => { :unique_id => @pseudonym.unique_id, :password => 'qwerty' }
       response.should render_template('otp_login')
     end
 
     it "should ignore a cookie from an old secret_key" do
-      cookies['canvas_otp_remember_me'] = @user.otp_secret_key_remember_me_cookie(6.months.ago)
+      cookies['canvas_otp_remember_me'] = @user.otp_secret_key_remember_me_cookie(6.months.ago, nil, 'myip')
 
       @user.otp_secret_key = ROTP::Base32.random_base32
       @user.save!
 
+      post 'create', :pseudonym_session => { :unique_id => @pseudonym.unique_id, :password => 'qwerty' }
+      response.should render_template('otp_login')
+    end
+
+    it "should ignore a cookie for a different IP" do
+      cookies['canvas_otp_remember_me'] = @user.otp_secret_key_remember_me_cookie(Time.now.utc, nil, 'otherip')
       post 'create', :pseudonym_session => { :unique_id => @pseudonym.unique_id, :password => 'qwerty' }
       response.should render_template('otp_login')
     end
@@ -953,6 +959,16 @@ describe PseudonymSessionsController do
         post 'otp_login', :otp_login => { :verification_code => ROTP::TOTP.new(@user.otp_secret_key).now, :remember_me => '1' }
         response.should redirect_to dashboard_url(:login_success => 1)
         cookies['canvas_otp_remember_me'].should_not be_nil
+      end
+
+      it "should add the current ip to existing ips" do
+        cookies['canvas_otp_remember_me'] = @user.otp_secret_key_remember_me_cookie(Time.now.utc, nil, 'ip1')
+        ActionController::Request.any_instance.stubs(:remote_ip).returns('ip2')
+        post 'otp_login', :otp_login => { :verification_code => ROTP::TOTP.new(@user.otp_secret_key).now, :remember_me => '1' }
+        response.should redirect_to dashboard_url(:login_success => 1)
+        cookies['canvas_otp_remember_me'].should_not be_nil
+        _, ips, _ = @user.parse_otp_remember_me_cookie(cookies['canvas_otp_remember_me'])
+        ips.sort.should == ['ip1', 'ip2']
       end
 
       it "should fail for an incorrect token" do
@@ -1165,7 +1181,7 @@ describe PseudonymSessionsController do
 
       @other_user = @user
       @admin = user_with_pseudonym(:active_all => 1, :unique_id => 'user2')
-      Account.default.add_user(@admin)
+      Account.default.account_users.create!(user: @admin)
       user_session(@admin)
       post 'disable_otp_login', :user_id => @other_user.id
       response.should be_success

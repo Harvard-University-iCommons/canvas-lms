@@ -38,6 +38,23 @@ $muteTextColor: #949494;
       }
     }
   }
+
+  .erratic-statistics {
+    text-align: center;
+    margin-top: 20px;
+
+    img {
+      height: 35px;
+      width: 218px;
+    }
+
+    h3 {
+      font-weight: bold;
+      margin-bottom: 0;
+      line-height: 22px;
+      font-size: 14.5px;
+    }
+  }
 }
 
 #question-statistics-section {
@@ -144,10 +161,6 @@ $muteTextColor: #949494;
         &.bar-striped {
           pointer-events: none;
         }
-
-        &:hover {
-          fill: orangered;
-        }
       }
 
       pattern#diagonalStripes {
@@ -217,7 +230,7 @@ $muteTextColor: #949494;
     height: 120px;
 
     path.score-line, circle {
-      stroke: #3cb878;
+      stroke: #349e67;
       shape-rendering: geometricPrecision;
       image-rendering: optimizeQuality;
     }
@@ -234,11 +247,7 @@ $muteTextColor: #949494;
     circle {
       stroke-width: 4px;
       stroke: white;
-      fill: #3cb878;
-
-      &:hover {
-        fill: orangered;
-      }
+      fill: #349e67;
     }
   }
 

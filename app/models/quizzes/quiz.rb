@@ -48,6 +48,7 @@ class Quizzes::Quiz < ActiveRecord::Base
   has_many :attachments, :as => :context, :dependent => :destroy
   has_many :quiz_regrades, class_name: 'Quizzes::QuizRegrade'
   belongs_to :context, :polymorphic => true
+  validates_inclusion_of :context_type, :allow_nil => true, :in => ['Course']
   belongs_to :assignment
   belongs_to :assignment_group
 
@@ -72,7 +73,6 @@ class Quizzes::Quiz < ActiveRecord::Base
   validate :validate_quiz_type, :if => :quiz_type_changed?
   validate :validate_ip_filter, :if => :ip_filter_changed?
   validate :validate_hide_results, :if => :hide_results_changed?
-  validate :validate_draft_state_change, :if => :workflow_state_changed?
   validate :validate_correct_answer_visibility, :if => lambda { |quiz|
     quiz.show_correct_answers_at_changed? ||
       quiz.hide_correct_answers_at_changed?
@@ -80,7 +80,7 @@ class Quizzes::Quiz < ActiveRecord::Base
   sanitize_field :description, CanvasSanitize::SANITIZE
   copy_authorized_links(:description) { [self.context, nil] }
 
-  before_save :generate_quiz_data_on_publish
+  before_save :generate_quiz_data_on_publish, :if => :needs_republish?
   before_save :build_assignment
   before_save :set_defaults
   before_save :flag_columns_that_need_republish
@@ -148,23 +148,24 @@ class Quizzes::Quiz < ActiveRecord::Base
   # generate quiz data and update time when we publish. This method makes it
   # harder to mess up (like someone setting using workflow_state directly)
   def generate_quiz_data_on_publish
-    # when draft state is turned on permanently, remove this conditional, the
-    # @publishing ivar from publish!, and change the filter to:
-    #
-    #  before_save :generate_quiz_data_on_publish, :if => :workflow_state_changed?
-    #
-    if context.feature_enabled?(:draft_state)
-      return unless workflow_state_changed?
-
-    # pre-draft state we need ability to republish things. Since workflow_state
-    # is stays available, we need to flag when we're forcing to publish!
-    else
-      return unless @publishing
-    end
-
     if workflow_state == 'available'
       self.generate_quiz_data
       self.published_at = Time.zone.now
+    end
+  end
+  private :generate_quiz_data_on_publish
+
+  # @return [Boolean] Whether the quiz has unsaved changes due for a republish.
+  def needs_republish?
+    # TODO: remove this conditional and the non-DS scenario once Draft State is
+    # permanently turned on
+    if context.feature_enabled?(:draft_state)
+      return true if @publishing || workflow_state_changed?
+
+    # pre-draft state we need ability to republish things. Since workflow_state
+    # stays available, we need to flag when we're forcing to publish!
+    else
+      return true if @publishing
     end
   end
 
@@ -346,7 +347,7 @@ class Quizzes::Quiz < ActiveRecord::Base
 
     # NOTE: We don't have a submission user when the teacher is previewing the
     # quiz and displaying the results'
-    return true if self.grants_right?(user, nil, :grade) &&
+    return true if self.grants_right?(user, :grade) &&
       (submission && submission.user && submission.user != user)
 
     return false if !self.show_correct_answers
@@ -686,7 +687,7 @@ class Quizzes::Quiz < ActiveRecord::Base
     submission.end_at = nil
     submission.end_at = submission.started_at + (self.time_limit.to_f * 60.0) if self.time_limit
     # Admins can take the full quiz whenever they want
-    unless user.is_a?(::User) && self.grants_right?(user, nil, :grade)
+    unless user.is_a?(::User) && self.grants_right?(user, :grade)
       submission.end_at = due_at if due_at && ::Time.now < due_at && (!submission.end_at || due_at < submission.end_at)
       submission.end_at = lock_at if lock_at && !submission.manually_unlocked && (!submission.end_at || lock_at < submission.end_at)
     end
@@ -780,7 +781,7 @@ class Quizzes::Quiz < ActiveRecord::Base
 
 
   def locked_for?(user, opts={})
-    return false if opts[:check_policies] && self.grants_right?(user, nil, :update)
+    return false if opts[:check_policies] && self.grants_right?(user, :update)
     ::Rails.cache.fetch(locked_cache_key(user), :expires_in => 1.minute) do
       locked = false
       quiz_for_user = self.overridden_for(user)
@@ -1036,10 +1037,10 @@ class Quizzes::Quiz < ActiveRecord::Base
   end
 
   set_policy do
-    given { |user, session| self.cached_context_grants_right?(user, session, :manage_assignments) } #admins.include? user }
+    given { |user, session| self.context.grants_right?(user, session, :manage_assignments) } #admins.include? user }
     can :read_statistics and can :manage and can :read and can :update and can :delete and can :create and can :submit
 
-    given { |user, session| self.cached_context_grants_right?(user, session, :manage_grades) } #admins.include? user }
+    given { |user, session| self.context.grants_right?(user, session, :manage_grades) } #admins.include? user }
     can :read_statistics and can :read and can :submit and can :grade
 
     given { |user| self.available? && self.context.try_rescue(:is_public) && !self.graded? }
@@ -1047,25 +1048,25 @@ class Quizzes::Quiz < ActiveRecord::Base
 
     given do |user, session|
       (feature_enabled?(:draft_state) ? published? : true) &&
-        cached_context_grants_right?(user, session, :read)
+        context.grants_right?(user, session, :read)
     end
     can :read
 
-    given { |user, session| self.cached_context_grants_right?(user, session, :view_all_grades) }
+    given { |user, session| self.context.grants_right?(user, session, :view_all_grades) }
     can :read_statistics and can :review_grades
 
     given do |user, session|
       available? &&
-        cached_context_grants_right?(user, session, :participate_as_student)
+        context.grants_right?(user, session, :participate_as_student)
     end
     can :read and can :submit
   end
 
-  scope :include_assignment, includes(:assignment)
+  scope :include_assignment, -> { includes(:assignment) }
   scope :before, lambda { |date| where("quizzes.created_at<?", date) }
-  scope :active, where("quizzes.workflow_state<>'deleted'")
-  scope :not_for_assignment, where(:assignment_id => nil)
-  scope :available, where("quizzes.workflow_state = 'available'")
+  scope :active, -> { where("quizzes.workflow_state<>'deleted'") }
+  scope :not_for_assignment, -> { where(:assignment_id => nil) }
+  scope :available, -> { where("quizzes.workflow_state = 'available'") }
 
   def teachers
     context.teacher_enrollments.map(&:user)
