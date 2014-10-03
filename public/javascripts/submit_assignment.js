@@ -123,7 +123,10 @@ define([
     });
 
     window.onbeforeunload = function() {
-      if($("#submit_assignment:visible").length > 0 && !submitting) {
+      var fileElements = $(this).find('input[type=file]:visible').filter(function() {
+          return $(this).val() !== '';
+        });
+      if($("#submit_assignment:visible").length > 0 && !submitting && fileElements.length !== 0) {
         return I18n.t('messages.not_submitted_yet', "You haven't finished submitting your assignment.  You still need to click \"Submit\" to finish turning it in.  Do you want to leave this page anyway?");
       }
     };
